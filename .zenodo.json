@@ -1,0 +1,37 @@
+{
+  "title": "SBRUG: Sampling Best Response in Undercutting Games",
+  "upload_type": "software",
+  "description": "<p>SBRUG (Sampling Best Response in Undercutting Games) is a NetLogo model that compares two ways of revising a strategy in undercutting games, such as the traveler's dilemma and the finitely repeated prisoner's dilemma: best responding to the strategies of a few randomly observed agents (Sampling BR), and best responding to the exact population state (Exact BR). Both rules run side by side, on two populations that share the revising agents and the experiments.</p><p>The model runs in the browser at <a href=\"https://luis-r-izquierdo.github.io/sbrug/\">https://luis-r-izquierdo.github.io/sbrug/</a>, and in NetLogo 7.0.4 or later.</p><p>Related paper: Luis R. Izquierdo and Segismundo S. Izquierdo, \"How Sampling and Experimentation Sustain Cooperation in Undercutting Games\".</p>",
+  "creators": [
+    {
+      "name": "Izquierdo, Luis R.",
+      "orcid": "0000-0003-1057-4465",
+      "affiliation": "Universidad de Burgos"
+    },
+    {
+      "name": "Izquierdo, Segismundo S.",
+      "orcid": "0000-0002-7113-0633",
+      "affiliation": "Universidad de Valladolid"
+    }
+  ],
+  "keywords": [
+    "sampling best response",
+    "experimentation",
+    "unraveling",
+    "traveler's dilemma",
+    "repeated prisoner's dilemma",
+    "evolutionary game theory",
+    "agent-based model",
+    "NetLogo"
+  ],
+  "license": "gpl-3.0-or-later",
+  "access_right": "open",
+  "language": "eng",
+  "related_identifiers": [
+    {
+      "identifier": "https://luis-r-izquierdo.github.io/sbrug/",
+      "relation": "isDocumentedBy"
+    }
+  ],
+  "notes": "We acknowledge financial support from the Spanish State Research Agency (PID2024-159461NB-I00/MICIU) and from the Regional Government of Castilla y León and the EU-FEDER (CLU-2025-2-05 - BIOECOUVA Unit of Excellence, Universidad de Valladolid)."
+}

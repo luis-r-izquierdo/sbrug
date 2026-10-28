@@ -22,6 +22,7 @@ Both rules run side by side, on two populations that share the revising agents a
 - `downloads/preview-cooperation.json` and `downloads/preview-metadata.json`: data and reproduction details of the illustrated run on the website.
 - `downloads/model.metadata.json`: versions and checksums of the browser model.
 - `LICENSE.txt`: the GNU General Public License, version 3.
+- `CITATION.cff` and `.zenodo.json`: citation metadata, used by GitHub and by Zenodo when it archives a release.
 
 This repository holds the published website. Its files are generated from the authors' sources.
 

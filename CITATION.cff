@@ -1,0 +1,32 @@
+cff-version: 1.2.0
+message: "If you use this software, please cite it as below."
+type: software
+title: "SBRUG: Sampling Best Response in Undercutting Games"
+authors:
+  - family-names: Izquierdo
+    given-names: Luis R.
+    orcid: "https://orcid.org/0000-0003-1057-4465"
+    affiliation: Universidad de Burgos
+  - family-names: Izquierdo
+    given-names: Segismundo S.
+    orcid: "https://orcid.org/0000-0002-7113-0633"
+    affiliation: Universidad de Valladolid
+abstract: >-
+  SBRUG is a NetLogo model that compares two ways of revising a strategy in
+  undercutting games, such as the traveler's dilemma and the finitely repeated
+  prisoner's dilemma: best responding to the strategies of a few randomly
+  observed agents (Sampling BR), and best responding to the exact population
+  state (Exact BR). Both rules run side by side, on two populations that share
+  the revising agents and the experiments.
+keywords:
+  - sampling best response
+  - experimentation
+  - unraveling
+  - traveler's dilemma
+  - repeated prisoner's dilemma
+  - evolutionary game theory
+  - agent-based model
+  - NetLogo
+license: GPL-3.0-or-later
+url: "https://luis-r-izquierdo.github.io/sbrug/"
+repository-code: "https://github.com/luis-r-izquierdo/sbrug"
