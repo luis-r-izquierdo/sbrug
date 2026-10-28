@@ -1,0 +1,1379 @@
+<?xml version="1.0" encoding="utf-8"?>
+<model version="NetLogo 7.0.4" snapToGrid="true">
+  <code><![CDATA[;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;; GNU GENERAL PUBLIC LICENSE ;;;
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+;; SBRUG: Sampling Best Response in Undercutting Games
+;; SBRUG is a model designed to compare sampling best response
+;; with best response to the exact population state in two undercutting games:
+;; the traveler's dilemma and the finitely repeated prisoner's dilemma.
+;; Both revision rules run at the same time, on two populations that share
+;; the revising agents, the decisions to experiment and the experimental strategies.
+;; Related paper: "How Sampling and Experimentation Sustain Cooperation in
+;; Undercutting Games", by Luis R. Izquierdo and Segismundo S. Izquierdo.
+;; Website, with an online version of the model: https://luis-r-izquierdo.github.io/sbrug/
+;;
+;; Copyright (C) 2026 Luis R. Izquierdo & Segismundo S. Izquierdo
+;;
+;; This program is free software: you can redistribute it and/or modify
+;; it under the terms of the GNU General Public License as published by
+;; the Free Software Foundation, either version 3 of the License, or
+;; (at your option) any later version.
+;;
+;; This program is distributed in the hope that it will be useful,
+;; but WITHOUT ANY WARRANTY; without even the implied warranty of
+;; MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+;; GNU General Public License for more details.
+;;
+;; You should have received a copy of the GNU General Public License
+;; along with this program.  If not, see <http://www.gnu.org/licenses/>.
+;;
+;; Contact information:
+;; Luis R. Izquierdo
+;;   University of Burgos, Spain.
+;;   e-mail: lrizquierdo@ubu.es
+
+
+;;;;;;;;;;;;;;;;;
+;;; VARIABLES ;;;
+;;;;;;;;;;;;;;;;;
+
+globals [
+  n-of-strategies     ;; horizon + 1 
+                      ;; strategy i means stop at i 
+                      ;; strategy (horizon + 1) never stops first
+  strategy-numbers    ;; [1 2 ... n-of-strategies]
+
+  ;; payoffs: strategy i earns A(i) against a later strategy,
+  ;; B(i) against itself, and F(j) against an earlier strategy j
+  A-payoffs           ;; item (i - 1) is A(i)
+  B-payoffs           ;; item (i - 1) is B(i)
+  F-payoffs           ;; item (i - 1) is F(i)
+  premium-ratio       ;; premium bound divided by waiting gain. Each period of delay raises
+                      ;; A(i), the payoff of stopping first at i, by at least the waiting gain.
+                      ;; Against strategy i, matching i or stopping at i - 1 earns at most
+                      ;; the premium bound more than any later strategy
+
+  sbr-counts           ;; item (i - 1) is the number of agents using strategy i under sampling
+  br-counts            ;; item (i - 1) is the number of agents using strategy i under exact information
+  br-reply             ;; best reply to the exact population state
+  br-reply-up-to-date? ;; false if br-counts have changed since br-reply was computed
+
+  n-of-players          ;; this number never changes during a simulation
+  experiments-this-tick ;; strategies above 1 chosen by experimenting agents in the current tick
+                        ;; (only for displaying purposes)
+
+  sbr-coop-history    ;; item (t - 1) is C/n under sampling at tick t
+  br-coop-history     ;; item (t - 1) is C/n under exact information at tick t
+  run-length          ;; final-time at setup; this number never changes during a simulation
+
+  sbr-row-0           ;; row of the view that shows strategy 1 under sampling
+  br-row-0            ;; row of the view that shows strategy 1 under exact information
+]
+
+breed [players player]
+
+players-own [
+  sbr-strategy  ;; strategy under sampling best response, an integer between 1 and n-of-strategies
+  br-strategy   ;; strategy under best response to the exact population state
+]
+
+
+;;;;;;;;;;;;;
+;;; SETUP ;;;
+;;;;;;;;;;;;;
+
+to startup
+
+  clear-all
+  ;; NetLogo Web starts every session with the same random seed
+  if netlogo-web? [ random-seed new-seed ]
+
+  setup-globals
+  
+  if not valid-PD-payoffs? [
+    user-message "The prisoner's dilemma requires T > R > P > S."
+    stop
+  ]
+  
+  setup-world   ;; before setup-agents, since resize-world kills all turtles
+  setup-payoffs
+  setup-agents
+
+  reset-ticks
+  setup-graphs
+  update-graphs
+
+end
+
+
+to setup-globals
+
+  set n-of-strategies horizon + 1
+  set strategy-numbers (range 1 (n-of-strategies + 1))
+  set n-of-players n-of-agents
+
+  set experiments-this-tick []
+  set run-length final-time
+
+  ;; keep the mean monitors valid even if parameter validation stops setup
+  set sbr-coop-history []
+  set br-coop-history []
+
+end
+
+
+to-report valid-PD-payoffs?
+  report game != "repeated prisoner's dilemma -->>" or
+         (payoff-T > payoff-R and payoff-R > payoff-P and payoff-P > payoff-S)
+end
+
+
+to setup-world
+
+  ;; for each revision rule, one row per strategy. The view is at most 710 x 480
+  ;; pixels, and patches are whole pixels so that all marks have the same size.
+  ;; Patches are as large as possible while the view keeps one column per tick,
+  ;; or at least 300 columns in runs longer than 300 ticks
+  let n-of-rows 2 * n-of-strategies + 5
+  let pixels max (list 1 floor min (list (480 / n-of-rows) (710 / min (list run-length 300))))
+  let n-of-columns min (list run-length floor (710 / pixels))
+  resize-world 0 (n-of-columns - 1) 0 (n-of-rows - 1)
+  set-patch-size pixels
+
+  set br-row-0 0
+  set sbr-row-0 n-of-strategies + 5
+
+  ask patches [ set pcolor white ]
+  ask patches with [pycor >= n-of-strategies and pycor < sbr-row-0] [ set pcolor 8 ]
+
+end
+
+
+to setup-payoffs
+
+  ifelse game = "<<-- traveler's dilemma"
+  [ ;; strategy i is the claim i + 1. Both travelers are paid the lower claim,
+    ;; and the reward is added to the lower claimant's payment and subtracted
+    ;; from the higher claimant's. At a tie both receive their claim.
+    set A-payoffs map [ i -> i + 1 + reward ] strategy-numbers
+    set B-payoffs map [ i -> i + 1 ] strategy-numbers
+    set F-payoffs map [ j -> j + 1 - reward ] strategy-numbers
+
+    ;; waiting gain 1 and premium bound (2 * reward - 1)
+    set premium-ratio (2 * reward - 1)
+  ]
+  [ ;; repeated prisoner's dilemma with horizon rounds. Strategy i cooperates until
+    ;; round i - 1 and defects from round i on, or from the round after the
+    ;; opponent's first defection, if earlier. Strategy horizon + 1 never defects first.
+    set A-payoffs map [ i -> (i - 1) * payoff-R + payoff-T + (horizon - i) * payoff-P ] strategy-numbers
+    set B-payoffs map [ i -> (i - 1) * payoff-R + (horizon - i + 1) * payoff-P ] strategy-numbers
+    set F-payoffs map [ j -> (j - 1) * payoff-R + payoff-S + (horizon - j) * payoff-P ] strategy-numbers
+
+    ;; waiting gain (R - P) and premium bound (T - R + P - S)
+    set premium-ratio (payoff-T - payoff-R + payoff-P - payoff-S) / (payoff-R - payoff-P)
+  ]
+
+end
+
+
+to setup-agents
+
+  create-players n-of-players [
+    set sbr-strategy initial-strategy
+    set br-strategy sbr-strategy   ;; both populations start from the same state
+    set hidden? true
+  ]
+
+  set sbr-counts map [ i -> count players with [sbr-strategy = i] ] strategy-numbers
+  set br-counts sbr-counts
+  set br-reply-up-to-date? false
+
+end
+
+
+to-report initial-strategy
+  report (ifelse-value
+    initial-state = "everyone at strategy 1" [ 1 ]
+    initial-state = "everyone at the last strategy" [ n-of-strategies ]
+    [ one-of strategy-numbers ])  ;; "uniformly random"
+end
+
+
+;;;;;;;;;;;;
+;;;  GO  ;;;
+;;;;;;;;;;;;
+
+;; Each agent revises at the times of its own rate-one Poisson clock. Then each
+;; revision in the population is made by an agent chosen at random, and the
+;; expected time between two revisions is 1 / n-of-players. We follow this
+;; sequence of revisions: each tick consists of n-of-players revisions, which
+;; is one unit of revision time.
+
+to go
+  if ticks >= run-length [ stop ]
+  set experiments-this-tick []
+  repeat n-of-players [ update-strategy ]
+  tick
+  record-cooperation
+  update-graphs
+end
+
+
+;;;;;;;;;;;;;;;;;;;;;;;
+;;; UPDATE-STRATEGY ;;;
+;;;;;;;;;;;;;;;;;;;;;;;
+
+;; Both populations share the revising agent, the decision to experiment and
+;; the experimental strategy.
+
+to update-strategy
+  let reviser random-player
+
+  ifelse random-float 1 < prob-exp
+
+  [ ;; experiment: choose a strategy at random
+    let s one-of strategy-numbers
+    if s > 1 [ set experiments-this-tick lput s experiments-this-tick ]
+    ask reviser [
+      set-sbr-strategy s
+      set-br-strategy s
+    ]
+  ]
+
+  [ ;; best respond
+    ask reviser [
+      set-sbr-strategy best-reply-to-sample
+      set-br-strategy best-reply-to-population
+    ]
+  ]
+end
+
+
+to-report random-player
+  ;; players have who numbers 0 to n-of-players - 1 (clear-all restarts the who
+  ;; numbers), so we pick one by its who number. This is much faster than
+  ;; one-of players, whose time grows with the number of players.
+  report player random n-of-players
+end
+
+
+to set-sbr-strategy [s] ;; player procedure
+  if s != sbr-strategy [
+    set sbr-counts replace-item (sbr-strategy - 1) sbr-counts (item (sbr-strategy - 1) sbr-counts - 1)
+    set sbr-counts replace-item (s - 1) sbr-counts (item (s - 1) sbr-counts + 1)
+    set sbr-strategy s
+  ]
+end
+
+
+to set-br-strategy [s] ;; player procedure
+  if s != br-strategy [
+    set br-counts replace-item (br-strategy - 1) br-counts (item (br-strategy - 1) br-counts - 1)
+    set br-counts replace-item (s - 1) br-counts (item (s - 1) br-counts + 1)
+    set br-strategy s
+    set br-reply-up-to-date? false
+  ]
+end
+
+
+;; The slider sets the probability of experimentation on a logarithmic scale.
+
+to-report prob-exp
+  report (10 ^ log10-prob-exp)
+end
+
+
+;;;;;;;;;;;;;;;;;;;
+;;; BEST REPLIES ;;;
+;;;;;;;;;;;;;;;;;;;
+
+to-report best-reply-to-sample
+  ;; observe sample-size agents, drawn at random with replacement
+  let sample n-values sample-size [ [sbr-strategy] of random-player ]
+  
+  ;; every best reply lies between m - reply-width and m - 1, or is 1, where m is
+  ;; the latest strategy in the sample (see reply-width)
+  let m max sample
+  let candidates (range (max list 1 (m - reply-width)) (max list 2 m))
+
+  ;; total payoff of each candidate against the sample; ties select the smallest strategy
+  let payoffs map [ i -> sum map [ j -> payoff i j ] sample ] candidates
+  report item (position (max payoffs) payoffs) candidates
+end
+
+
+to-report reply-width
+  ;; Let m be the latest strategy in the sample. Every best reply is 1 or lies between
+  ;; m - reply-width and m - 1. No later strategy earns more than m - 1. Compared with
+  ;; an earlier strategy j, m - 1 earns at least waiting gain * (m - 1 - j) more against
+  ;; an observation of m, and at most the premium bound less against each other
+  ;; observation. We compute it here, rather than in setup, so that sample-size can
+  ;; be changed during a run.
+  ;; The term 1e-9 guards against rounding errors when (sample-size - 1) times
+  ;; the premium ratio is an integer.
+  report floor ((sample-size - 1) * premium-ratio + 1e-9) + 1
+end
+
+
+to-report best-reply-to-population
+  ;; the population state changes only at some revisions, so we compute
+  ;; its best reply again only when it has changed
+  if not br-reply-up-to-date? [
+    let payoffs payoffs-against br-counts
+    set br-reply 1 + position (max payoffs) payoffs  
+      ;; ties select the smallest strategy (position reports the first position of item in list)
+    set br-reply-up-to-date? true
+  ]
+  report br-reply
+end
+
+
+;;;;;;;;;;;;;;;
+;;; PAYOFFS ;;;
+;;;;;;;;;;;;;;;
+
+to-report payoff [i j]  ;; payoff of strategy i against strategy j
+  report (ifelse-value
+    (i < j) [ item (i - 1) A-payoffs ]
+    (i = j) [ item (i - 1) B-payoffs ]
+            [ item (j - 1) F-payoffs ])
+end
+
+
+to-report payoffs-against [counts]
+  ;; total payoff of each strategy i against a population with these strategy counts:
+  ;; A(i) times the number of agents using later strategies, plus B(i) times the
+  ;; number using i, plus F(j) times the number using j, summed over j < i
+  let n-later sum counts
+  let F-earlier 0
+  let payoffs []
+  (foreach counts A-payoffs B-payoffs F-payoffs [
+    [n-at-i A B F] ->
+    set n-later n-later - n-at-i
+    set payoffs lput (A * n-later + B * n-at-i + F-earlier) payoffs
+    set F-earlier F-earlier + F * n-at-i
+  ])
+  report payoffs
+end
+
+
+;;;;;;;;;;;;;;;;;;;
+;;; COOPERATION ;;;
+;;;;;;;;;;;;;;;;;;;
+
+to-report cooperation [counts]
+  ;; C / n, where C is the expected number of periods before the earlier
+  ;; stop in a random match: the sum over j > 1 of Q(j) ^ 2, with Q(j) the
+  ;; share of agents using strategy j or later
+  let share-j-or-later 0
+  let C 0
+  foreach reverse but-first counts [ n-at-j ->
+    set share-j-or-later share-j-or-later + n-at-j / n-of-players
+    set C C + share-j-or-later ^ 2
+  ]
+  report C / (n-of-strategies - 1)  ;; the horizon at setup
+end
+
+
+to record-cooperation
+  set sbr-coop-history lput (cooperation sbr-counts) sbr-coop-history
+  set br-coop-history  lput (cooperation br-counts)  br-coop-history
+end
+
+
+to-report mean-cooperation [history]
+  ;; average of C/n over ticks t >= mean-from. We keep the whole history,
+  ;; so mean-from can be changed at any time during a run
+  let first-index max (list 0 (mean-from - 1))
+  report ifelse-value (first-index < length history)
+    [ mean sublist history first-index (length history) ]
+    [ "-" ]
+end
+
+
+;;;;;;;;;;;;;;;;
+;;; MONITORS ;;;
+;;;;;;;;;;;;;;;;
+
+to-report three-significant-digits [x]
+  ;; x with three significant digits, as text. NetLogo Web rounds monitors to a
+  ;; fixed number of decimal places, so it would show small values as 0
+  if not is-number? x or x = 0 [ report (word x) ]
+  report (word precision x (2 - floor log (abs x) 10))
+end
+
+
+;;;;;;;;;;;;;;
+;;; GRAPHS ;;;
+;;;;;;;;;;;;;;
+
+to setup-graphs
+  set-current-plot "Cooperation C/n"
+  set-plot-x-range 0 run-length
+end
+
+
+to update-graphs
+
+  set-current-plot "Cooperation C/n"
+  set-current-plot-pen "Sampling BR"
+  plotxy ticks cooperation sbr-counts
+  set-current-plot-pen "Exact BR"
+  plotxy ticks cooperation br-counts
+
+  ;; tick t goes to column floor((t - 1) * world-width / run-length). When a column
+  ;; covers several ticks, we draw only the last one
+  if ticks > 0 and floor (ticks * world-width / run-length) > floor ((ticks - 1) * world-width / run-length) [
+    let x floor ((ticks - 1) * world-width / run-length)
+    draw-column x sbr-counts sbr-row-0
+    draw-column x br-counts br-row-0
+  ]
+
+end
+
+
+to draw-column [x counts row-0]
+  ;; share of each strategy, from dark blue (share 1) to light blue (share 1 / n-of-players)
+  ;; on a logarithmic scale; white denotes zero. Orange cells mark experiments with
+  ;; strategies above 1 in this tick.
+  (foreach strategy-numbers counts [ [s n-at-s] ->
+    let share n-at-s / n-of-players
+    ask patch x (row-0 + s - 1) [
+      set pcolor ifelse-value (share = 0)
+        [ white ]
+        [ 101 + 7 * (ln share) / (ln (1 / n-of-players)) ]
+    ]
+  ])
+  foreach experiments-this-tick [ s ->
+    ask patch x (row-0 + s - 1) [ set pcolor orange ]
+  ]
+end
+]]></code>
+  <widgets>
+    <view x="475" wrappingAllowedX="false" y="190" frameRate="200.0" minPycor="0" height="410" showTickCounter="true" patchSize="2.0" fontSize="10" wrappingAllowedY="false" width="604" tickCounterLabel="time" maxPycor="202" updateMode="1" maxPxcor="299" minPxcor="0"></view>
+    <note x="970" y="5" backgroundDark="0" fontSize="12" width="220" markdown="true" height="46" textColorDark="-1" textColorLight="-16777216" backgroundLight="0"><![CDATA[<div style="text-align: right; padding-right: 6px"><b>Prisoner's dilemma:</b><br> 
+horizon rounds; payoffs T, R, P, S.</div>]]></note>
+    <slider x="1040" step="1" y="100" max="10" width="150" display="payoff-P" height="50" min="0" direction="Horizontal" default="1.0" variable="payoff-P"></slider>
+    <slider x="885" step="1" y="100" max="10" width="150" display="payoff-T" height="50" min="0" direction="Horizontal" default="6.0" variable="payoff-T"></slider>
+    <slider x="1040" step="1" y="45" max="10" width="150" display="payoff-S" height="50" min="0" direction="Horizontal" default="0.0" variable="payoff-S"></slider>
+    <slider x="5" step="1" y="55" max="10" width="188" display="sample-size" height="50" min="1" direction="Horizontal" default="2.0" variable="sample-size"></slider>
+    <slider x="208" step="0.1" y="60" max="0" width="150" display="log10-prob-exp" height="50" min="-6" direction="Horizontal" default="-3.0" variable="log10-prob-exp"></slider>
+    <button x="80" y="215" height="40" disableUntilTicks="true" forever="false" kind="Observer" width="80" display="go once">go</button>
+    <slider x="5" step="1" y="140" max="2000" width="188" display="n-of-agents" height="50" min="2" direction="Horizontal" default="1000.0" variable="n-of-agents"></slider>
+    <button x="165" y="215" height="40" disableUntilTicks="true" forever="true" kind="Observer" width="65">go</button>
+    <note x="480" y="10" backgroundDark="0" fontSize="12" width="145" markdown="true" height="61" textColorDark="-1" textColorLight="-16777216" backgroundLight="0"><![CDATA[<div><b>Traveler's dilemma:</b> <br> 
+Claims from 2 to <br> (horizon + 2)</div>]]></note>
+    <monitor x="400" precision="0" y="200" height="57" fontSize="11" display="time" width="65" sizeVersion="0">ticks</monitor>
+    <slider x="235" step="10" y="215" max="5000" display="final-time" height="42" min="10" direction="Horizontal" default="300.0" variable="final-time" width="160" sizeVersion="0"></slider>
+    <plot x="5" autoPlotX="true" yMax="1.0" autoPlotY="true" yAxis="C/n" y="265" xMin="0.0" height="280" legend="true" xMax="10.0" yMin="0.0" width="460" xAxis="time" display="Cooperation C/n">
+      <setup></setup>
+      <update></update>
+      <pen interval="1.0" mode="0" display="Sampling BR" color="-8703340" legend="true">
+        <setup></setup>
+        <update></update>
+      </pen>
+      <pen interval="1.0" mode="0" display="Exact BR" color="-14976969" legend="true">
+        <setup></setup>
+        <update></update>
+      </pen>
+    </plot>
+    <monitor x="220" precision="3" y="550" height="60" fontSize="11" width="245" display="mean C/n Sampling BR, from mean-from">three-significant-digits mean-cooperation sbr-coop-history</monitor>
+    <monitor x="220" precision="3" y="615" height="60" fontSize="11" width="245" display="mean C/n Exact BR, from mean-from">three-significant-digits mean-cooperation br-coop-history</monitor>
+    <slider x="5" step="10" y="585" max="5000" width="205" display="mean-from" height="50" min="0" direction="Horizontal" default="100.0" variable="mean-from"></slider>
+    <chooser x="203" y="140" height="50" variable="initial-state" current="0" display="initial-state" width="260" sizeVersion="0">
+      <choice type="string" value="everyone at strategy 1"></choice>
+      <choice type="string" value="everyone at the last strategy"></choice>
+      <choice type="string" value="uniformly random"></choice>
+    </chooser>
+    <monitor x="363" precision="5" y="57" height="60" fontSize="11" width="100" display="prob-exp">three-significant-digits prob-exp</monitor>
+    <slider x="650" step="1" y="90" max="200" width="215" display="horizon" height="50" min="1" direction="Horizontal" default="98.0" variable="horizon"></slider>
+    <chooser x="640" y="10" height="75" variable="game" current="0" width="235" display="game">
+      <choice type="string" value="&lt;&lt;-- traveler's dilemma"></choice>
+      <choice type="string" value="repeated prisoner's dilemma --&gt;&gt;"></choice>
+    </chooser>
+    <button x="5" y="215" height="40" disableUntilTicks="false" forever="false" kind="Observer" width="70" display="setup">startup</button>
+    <slider x="885" step="1" y="45" max="10" width="150" display="payoff-R" height="50" min="0" direction="Horizontal" default="5.0" variable="payoff-R"></slider>
+    <slider x="480" step="1" y="70" max="10" width="150" display="reward" height="50" min="2" direction="Horizontal" default="2.0" variable="reward"></slider>
+    <note x="278" y="30" backgroundDark="0" fontSize="12" width="150" markdown="true" height="25" textColorDark="-1" textColorLight="-16777216" backgroundLight="0"><![CDATA[<div><b>Experimentation</b></div>]]></note>
+    <note x="5" y="15" backgroundDark="0" fontSize="12" width="170" markdown="true" height="46" textColorDark="-1" textColorLight="-16777216" backgroundLight="0"><![CDATA[<div><b>Sample size for<br>
+Sampling Best Response</b></div>]]></note>
+    <note x="475" y="160" backgroundDark="0" fontSize="14" width="715" markdown="true" height="25" textColorDark="-1" textColorLight="-16777216" backgroundLight="0"><![CDATA[<div>Upper panel: <b>Strategy distribution in <span style="color: #7b3294">Sampling BR</span></b> &nbsp;&nbsp; · &nbsp;&nbsp;Lower panel: <b>Strategy distribution in <span style="color: #1b7837">Exact BR</span></b></div>]]></note>
+  </widgets>
+  <info><![CDATA[## WHAT IS IT?
+
+SBRUG (Sampling Best Response in Undercutting Games) compares two revision rules in undercutting games: sampling best response, under which a revising agent best responds to the strategies of a few randomly observed agents, and best response to the exact population state. Its website, [luis-r-izquierdo.github.io/sbrug](https://luis-r-izquierdo.github.io/sbrug/), explains the model and runs it online.
+
+An undercutting game is a symmetric two-player game with ordered strategies 1, ..., horizon + 1. Lower strategies are called earlier, and higher strategies later. One way to picture it: two players share an activity that can last horizon periods; strategy i stops it at period i, except strategy horizon + 1, which never stops first. Continuing together pays, but each player can gain by stopping first: against strategy i > 1, the best reply is i - 1, and against strategy 1 it is 1.
+
+Two games are available. In the traveler's dilemma, strategy i is the claim i + 1, with claims 2, ..., horizon + 2; both travelers are paid the lower claim, and the reward is added to the lower claimant's payment and subtracted from the higher claimant's. In the finitely repeated prisoner's dilemma with horizon rounds, strategy i cooperates until round i - 1 and defects from round i on (or from the round after the opponent's first defection); strategy horizon + 1 never defects first.
+
+## HOW IT WORKS
+
+Each agent revises its strategy at the times of its own rate-one Poisson clock. The next revision in the population is then made by an agent chosen at random, so the model follows this sequence of revisions: each tick consists of n-of-agents revisions, which is one unit of revision time. On average, each agent revises once per tick.
+
+A revising agent experiments with probability prob-exp = 10 ^ log10-prob-exp, choosing a strategy at random. Otherwise:
+
+- under **sampling best response** (Sampling BR), it observes sample-size agents, drawn at random with replacement, and chooses a strategy with the highest total payoff against them;
+- under **best response to exact information** (Exact BR), it chooses a strategy with the highest expected payoff against the current population state.
+
+Ties select the smallest strategy. Both rules run at the same time, on two populations that share the revising agents, the decisions to experiment and the experimental strategies.
+
+## HOW TO USE IT
+
+Choose the game and its parameters, the population and the initial state, and press **setup** and **go**. The run stops at final-time, which can be as large as 5000. The game, its parameters, the horizon, the population, the initial state and final-time take effect at the next setup; sample-size, log10-prob-exp and mean-from can also be changed during a run. The slider log10-prob-exp sets the probability of experimentation on a logarithmic scale, and the monitor next to it shows prob-exp.
+
+The view shows snapshots of the share of the population using each strategy, from dark blue (everyone) to light blue (one agent) on a logarithmic scale; white denotes zero. It has one column per tick, or at least 300 columns in runs longer than 300 ticks; when a column covers several consecutive ticks, it shows the last of them. For example, with horizon 98, runs of up to 355 ticks have one column per tick, and a run of 5000 ticks uses 355 columns of 14 or 15 ticks. Strategies grow from bottom to top. The upper panel shows Sampling BR and the lower panel Exact BR. Orange cells mark experiments with strategies above 1 in the displayed tick; experiments and short-lived changes in the other ticks of a column do not appear.
+
+The plot records cooperation C/n at every tick under both rules: the expected number of periods before the earlier stop in a random match, divided by the horizon. The monitors show its average over all ticks from mean-from on, including those between snapshots.
+
+## THINGS TO NOTICE
+
+Under Sampling BR, a rare experiment with a late strategy can be decisive for an agent that observes it, and the slightly earlier reply can be observed in turn. Under Exact BR, a rare late strategy barely changes expected payoffs.
+
+## HOW TO CITE
+
+Luis R. Izquierdo and Segismundo S. Izquierdo (2026). SBRUG: Sampling Best Response in Undercutting Games. NetLogo model. https://luis-r-izquierdo.github.io/sbrug/
+
+## CREDITS AND REFERENCES
+
+Related paper: Luis R. Izquierdo and Segismundo S. Izquierdo. How Sampling and Experimentation Sustain Cooperation in Undercutting Games.
+
+Copyright (C) 2026 Luis R. Izquierdo & Segismundo S. Izquierdo. GNU General Public License, version 3 or later.]]></info>
+  <turtleShapes>
+    <shape name="default" rotatable="true" editableColorIndex="0">
+      <polygon color="-1920102913" filled="true" marked="true">
+        <point x="150" y="5"></point>
+        <point x="40" y="250"></point>
+        <point x="150" y="205"></point>
+        <point x="260" y="250"></point>
+      </polygon>
+    </shape>
+    <shape name="airplane" rotatable="true" editableColorIndex="0">
+      <polygon color="-1920102913" filled="true" marked="true">
+        <point x="150" y="0"></point>
+        <point x="135" y="15"></point>
+        <point x="120" y="60"></point>
+        <point x="120" y="105"></point>
+        <point x="15" y="165"></point>
+        <point x="15" y="195"></point>
+        <point x="120" y="180"></point>
+        <point x="135" y="240"></point>
+        <point x="105" y="270"></point>
+        <point x="120" y="285"></point>
+        <point x="150" y="270"></point>
+        <point x="180" y="285"></point>
+        <point x="210" y="270"></point>
+        <point x="165" y="240"></point>
+        <point x="180" y="180"></point>
+        <point x="285" y="195"></point>
+        <point x="285" y="165"></point>
+        <point x="180" y="105"></point>
+        <point x="180" y="60"></point>
+        <point x="165" y="15"></point>
+      </polygon>
+    </shape>
+    <shape name="arrow" rotatable="true" editableColorIndex="0">
+      <polygon color="-1920102913" filled="true" marked="true">
+        <point x="150" y="0"></point>
+        <point x="0" y="150"></point>
+        <point x="105" y="150"></point>
+        <point x="105" y="293"></point>
+        <point x="195" y="293"></point>
+        <point x="195" y="150"></point>
+        <point x="300" y="150"></point>
+      </polygon>
+    </shape>
+    <shape name="box" rotatable="false" editableColorIndex="0">
+      <polygon color="-1920102913" filled="true" marked="true">
+        <point x="150" y="285"></point>
+        <point x="285" y="225"></point>
+        <point x="285" y="75"></point>
+        <point x="150" y="135"></point>
+      </polygon>
+      <polygon color="-1920102913" filled="true" marked="true">
+        <point x="150" y="135"></point>
+        <point x="15" y="75"></point>
+        <point x="150" y="15"></point>
+        <point x="285" y="75"></point>
+      </polygon>
+      <polygon color="-1920102913" filled="true" marked="true">
+        <point x="15" y="75"></point>
+        <point x="15" y="225"></point>
+        <point x="150" y="285"></point>
+        <point x="150" y="135"></point>
+      </polygon>
+      <line endX="150" startY="285" marked="false" color="255" endY="135" startX="150"></line>
+      <line endX="15" startY="135" marked="false" color="255" endY="75" startX="150"></line>
+      <line endX="285" startY="135" marked="false" color="255" endY="75" startX="150"></line>
+    </shape>
+    <shape name="bug" rotatable="true" editableColorIndex="0">
+      <circle x="96" y="182" marked="true" color="-1920102913" diameter="108" filled="true"></circle>
+      <circle x="110" y="127" marked="true" color="-1920102913" diameter="80" filled="true"></circle>
+      <circle x="110" y="75" marked="true" color="-1920102913" diameter="80" filled="true"></circle>
+      <line endX="80" startY="100" marked="true" color="-1920102913" endY="30" startX="150"></line>
+      <line endX="220" startY="100" marked="true" color="-1920102913" endY="30" startX="150"></line>
+    </shape>
+    <shape name="butterfly" rotatable="true" editableColorIndex="0">
+      <polygon color="-1920102913" filled="true" marked="true">
+        <point x="150" y="165"></point>
+        <point x="209" y="199"></point>
+        <point x="225" y="225"></point>
+        <point x="225" y="255"></point>
+        <point x="195" y="270"></point>
+        <point x="165" y="255"></point>
+        <point x="150" y="240"></point>
+      </polygon>
+      <polygon color="-1920102913" filled="true" marked="true">
+        <point x="150" y="165"></point>
+        <point x="89" y="198"></point>
+        <point x="75" y="225"></point>
+        <point x="75" y="255"></point>
+        <point x="105" y="270"></point>
+        <point x="135" y="255"></point>
+        <point x="150" y="240"></point>
+      </polygon>
+      <polygon color="-1920102913" filled="true" marked="true">
+        <point x="139" y="148"></point>
+        <point x="100" y="105"></point>
+        <point x="55" y="90"></point>
+        <point x="25" y="90"></point>
+        <point x="10" y="105"></point>
+        <point x="10" y="135"></point>
+        <point x="25" y="180"></point>
+        <point x="40" y="195"></point>
+        <point x="85" y="194"></point>
+        <point x="139" y="163"></point>
+      </polygon>
+      <polygon color="-1920102913" filled="true" marked="true">
+        <point x="162" y="150"></point>
+        <point x="200" y="105"></point>
+        <point x="245" y="90"></point>
+        <point x="275" y="90"></point>
+        <point x="290" y="105"></point>
+        <point x="290" y="135"></point>
+        <point x="275" y="180"></point>
+        <point x="260" y="195"></point>
+        <point x="215" y="195"></point>
+        <point x="162" y="165"></point>
+      </polygon>
+      <polygon color="255" filled="true" marked="false">
+        <point x="150" y="255"></point>
+        <point x="135" y="225"></point>
+        <point x="120" y="150"></point>
+        <point x="135" y="120"></point>
+        <point x="150" y="105"></point>
+        <point x="165" y="120"></point>
+        <point x="180" y="150"></point>
+        <point x="165" y="225"></point>
+      </polygon>
+      <circle x="135" y="90" marked="false" color="255" diameter="30" filled="true"></circle>
+      <line endX="195" startY="105" marked="false" color="255" endY="60" startX="150"></line>
+      <line endX="105" startY="105" marked="false" color="255" endY="60" startX="150"></line>
+    </shape>
+    <shape name="car" rotatable="false" editableColorIndex="0">
+      <polygon color="-1920102913" filled="true" marked="true">
+        <point x="300" y="180"></point>
+        <point x="279" y="164"></point>
+        <point x="261" y="144"></point>
+        <point x="240" y="135"></point>
+        <point x="226" y="132"></point>
+        <point x="213" y="106"></point>
+        <point x="203" y="84"></point>
+        <point x="185" y="63"></point>
+        <point x="159" y="50"></point>
+        <point x="135" y="50"></point>
+        <point x="75" y="60"></point>
+        <point x="0" y="150"></point>
+        <point x="0" y="165"></point>
+        <point x="0" y="225"></point>
+        <point x="300" y="225"></point>
+        <point x="300" y="180"></point>
+      </polygon>
+      <circle x="180" y="180" marked="false" color="255" diameter="90" filled="true"></circle>
+      <circle x="30" y="180" marked="false" color="255" diameter="90" filled="true"></circle>
+      <polygon color="255" filled="true" marked="false">
+        <point x="162" y="80"></point>
+        <point x="132" y="78"></point>
+        <point x="134" y="135"></point>
+        <point x="209" y="135"></point>
+        <point x="194" y="105"></point>
+        <point x="189" y="96"></point>
+        <point x="180" y="89"></point>
+      </polygon>
+      <circle x="47" y="195" marked="true" color="-1920102913" diameter="58" filled="true"></circle>
+      <circle x="195" y="195" marked="true" color="-1920102913" diameter="58" filled="true"></circle>
+    </shape>
+    <shape name="circle" rotatable="false" editableColorIndex="0">
+      <circle x="0" y="0" marked="true" color="-1920102913" diameter="300" filled="true"></circle>
+    </shape>
+    <shape name="circle 2" rotatable="false" editableColorIndex="0">
+      <circle x="0" y="0" marked="true" color="-1920102913" diameter="300" filled="true"></circle>
+      <circle x="30" y="30" marked="false" color="255" diameter="240" filled="true"></circle>
+    </shape>
+    <shape name="cow" rotatable="false" editableColorIndex="0">
+      <polygon color="-1920102913" filled="true" marked="true">
+        <point x="200" y="193"></point>
+        <point x="197" y="249"></point>
+        <point x="179" y="249"></point>
+        <point x="177" y="196"></point>
+        <point x="166" y="187"></point>
+        <point x="140" y="189"></point>
+        <point x="93" y="191"></point>
+        <point x="78" y="179"></point>
+        <point x="72" y="211"></point>
+        <point x="49" y="209"></point>
+        <point x="48" y="181"></point>
+        <point x="37" y="149"></point>
+        <point x="25" y="120"></point>
+        <point x="25" y="89"></point>
+        <point x="45" y="72"></point>
+        <point x="103" y="84"></point>
+        <point x="179" y="75"></point>
+        <point x="198" y="76"></point>
+        <point x="252" y="64"></point>
+        <point x="272" y="81"></point>
+        <point x="293" y="103"></point>
+        <point x="285" y="121"></point>
+        <point x="255" y="121"></point>
+        <point x="242" y="118"></point>
+        <point x="224" y="167"></point>
+      </polygon>
+      <polygon color="-1920102913" filled="true" marked="true">
+        <point x="73" y="210"></point>
+        <point x="86" y="251"></point>
+        <point x="62" y="249"></point>
+        <point x="48" y="208"></point>
+      </polygon>
+      <polygon color="-1920102913" filled="true" marked="true">
+        <point x="25" y="114"></point>
+        <point x="16" y="195"></point>
+        <point x="9" y="204"></point>
+        <point x="23" y="213"></point>
+        <point x="25" y="200"></point>
+        <point x="39" y="123"></point>
+      </polygon>
+    </shape>
+    <shape name="cylinder" rotatable="false" editableColorIndex="0">
+      <circle x="0" y="0" marked="true" color="-1920102913" diameter="300" filled="true"></circle>
+    </shape>
+    <shape name="dot" rotatable="false" editableColorIndex="0">
+      <circle x="90" y="90" marked="true" color="-1920102913" diameter="120" filled="true"></circle>
+    </shape>
+    <shape name="face happy" rotatable="false" editableColorIndex="0">
+      <circle x="8" y="8" marked="true" color="-1920102913" diameter="285" filled="true"></circle>
+      <circle x="60" y="75" marked="false" color="255" diameter="60" filled="true"></circle>
+      <circle x="180" y="75" marked="false" color="255" diameter="60" filled="true"></circle>
+      <polygon color="255" filled="true" marked="false">
+        <point x="150" y="255"></point>
+        <point x="90" y="239"></point>
+        <point x="62" y="213"></point>
+        <point x="47" y="191"></point>
+        <point x="67" y="179"></point>
+        <point x="90" y="203"></point>
+        <point x="109" y="218"></point>
+        <point x="150" y="225"></point>
+        <point x="192" y="218"></point>
+        <point x="210" y="203"></point>
+        <point x="227" y="181"></point>
+        <point x="251" y="194"></point>
+        <point x="236" y="217"></point>
+        <point x="212" y="240"></point>
+      </polygon>
+    </shape>
+    <shape name="face neutral" rotatable="false" editableColorIndex="0">
+      <circle x="8" y="7" marked="true" color="-1920102913" diameter="285" filled="true"></circle>
+      <circle x="60" y="75" marked="false" color="255" diameter="60" filled="true"></circle>
+      <circle x="180" y="75" marked="false" color="255" diameter="60" filled="true"></circle>
+      <rectangle endX="240" startY="195" marked="false" color="255" endY="225" startX="60" filled="true"></rectangle>
+    </shape>
+    <shape name="face sad" rotatable="false" editableColorIndex="0">
+      <circle x="8" y="8" marked="true" color="-1920102913" diameter="285" filled="true"></circle>
+      <circle x="60" y="75" marked="false" color="255" diameter="60" filled="true"></circle>
+      <circle x="180" y="75" marked="false" color="255" diameter="60" filled="true"></circle>
+      <polygon color="255" filled="true" marked="false">
+        <point x="150" y="168"></point>
+        <point x="90" y="184"></point>
+        <point x="62" y="210"></point>
+        <point x="47" y="232"></point>
+        <point x="67" y="244"></point>
+        <point x="90" y="220"></point>
+        <point x="109" y="205"></point>
+        <point x="150" y="198"></point>
+        <point x="192" y="205"></point>
+        <point x="210" y="220"></point>
+        <point x="227" y="242"></point>
+        <point x="251" y="229"></point>
+        <point x="236" y="206"></point>
+        <point x="212" y="183"></point>
+      </polygon>
+    </shape>
+    <shape name="fish" rotatable="false" editableColorIndex="0">
+      <polygon color="-1" filled="true" marked="false">
+        <point x="44" y="131"></point>
+        <point x="21" y="87"></point>
+        <point x="15" y="86"></point>
+        <point x="0" y="120"></point>
+        <point x="15" y="150"></point>
+        <point x="0" y="180"></point>
+        <point x="13" y="214"></point>
+        <point x="20" y="212"></point>
+        <point x="45" y="166"></point>
+      </polygon>
+      <polygon color="-1" filled="true" marked="false">
+        <point x="135" y="195"></point>
+        <point x="119" y="235"></point>
+        <point x="95" y="218"></point>
+        <point x="76" y="210"></point>
+        <point x="46" y="204"></point>
+        <point x="60" y="165"></point>
+      </polygon>
+      <polygon color="-1" filled="true" marked="false">
+        <point x="75" y="45"></point>
+        <point x="83" y="77"></point>
+        <point x="71" y="103"></point>
+        <point x="86" y="114"></point>
+        <point x="166" y="78"></point>
+        <point x="135" y="60"></point>
+      </polygon>
+      <polygon color="-1920102913" filled="true" marked="true">
+        <point x="30" y="136"></point>
+        <point x="151" y="77"></point>
+        <point x="226" y="81"></point>
+        <point x="280" y="119"></point>
+        <point x="292" y="146"></point>
+        <point x="292" y="160"></point>
+        <point x="287" y="170"></point>
+        <point x="270" y="195"></point>
+        <point x="195" y="210"></point>
+        <point x="151" y="212"></point>
+        <point x="30" y="166"></point>
+      </polygon>
+      <circle x="215" y="106" marked="false" color="255" diameter="30" filled="true"></circle>
+    </shape>
+    <shape name="flag" rotatable="false" editableColorIndex="0">
+      <rectangle endX="75" startY="15" marked="true" color="-1920102913" endY="300" startX="60" filled="true"></rectangle>
+      <polygon color="-1920102913" filled="true" marked="true">
+        <point x="90" y="150"></point>
+        <point x="270" y="90"></point>
+        <point x="90" y="30"></point>
+      </polygon>
+      <line endX="90" startY="135" marked="true" color="-1920102913" endY="135" startX="75"></line>
+      <line endX="90" startY="45" marked="true" color="-1920102913" endY="45" startX="75"></line>
+    </shape>
+    <shape name="flower" rotatable="false" editableColorIndex="0">
+      <polygon color="1504722175" filled="true" marked="false">
+        <point x="135" y="120"></point>
+        <point x="165" y="165"></point>
+        <point x="180" y="210"></point>
+        <point x="180" y="240"></point>
+        <point x="150" y="300"></point>
+        <point x="165" y="300"></point>
+        <point x="195" y="240"></point>
+        <point x="195" y="195"></point>
+        <point x="165" y="135"></point>
+      </polygon>
+      <circle x="85" y="132" marked="true" color="-1920102913" diameter="38" filled="true"></circle>
+      <circle x="130" y="147" marked="true" color="-1920102913" diameter="38" filled="true"></circle>
+      <circle x="192" y="85" marked="true" color="-1920102913" diameter="38" filled="true"></circle>
+      <circle x="85" y="40" marked="true" color="-1920102913" diameter="38" filled="true"></circle>
+      <circle x="177" y="40" marked="true" color="-1920102913" diameter="38" filled="true"></circle>
+      <circle x="177" y="132" marked="true" color="-1920102913" diameter="38" filled="true"></circle>
+      <circle x="70" y="85" marked="true" color="-1920102913" diameter="38" filled="true"></circle>
+      <circle x="130" y="25" marked="true" color="-1920102913" diameter="38" filled="true"></circle>
+      <circle x="96" y="51" marked="true" color="-1920102913" diameter="108" filled="true"></circle>
+      <circle x="113" y="68" marked="false" color="255" diameter="74" filled="true"></circle>
+      <polygon color="1504722175" filled="true" marked="false">
+        <point x="189" y="233"></point>
+        <point x="219" y="188"></point>
+        <point x="249" y="173"></point>
+        <point x="279" y="188"></point>
+        <point x="234" y="218"></point>
+      </polygon>
+      <polygon color="1504722175" filled="true" marked="false">
+        <point x="180" y="255"></point>
+        <point x="150" y="210"></point>
+        <point x="105" y="210"></point>
+        <point x="75" y="240"></point>
+        <point x="135" y="240"></point>
+      </polygon>
+    </shape>
+    <shape name="house" rotatable="false" editableColorIndex="0">
+      <rectangle endX="255" startY="120" marked="true" color="-1920102913" endY="285" startX="45" filled="true"></rectangle>
+      <rectangle endX="180" startY="210" marked="false" color="255" endY="285" startX="120" filled="true"></rectangle>
+      <polygon color="-1920102913" filled="true" marked="true">
+        <point x="15" y="120"></point>
+        <point x="150" y="15"></point>
+        <point x="285" y="120"></point>
+      </polygon>
+      <line endX="270" startY="120" marked="false" color="255" endY="120" startX="30"></line>
+    </shape>
+    <shape name="leaf" rotatable="false" editableColorIndex="0">
+      <polygon color="-1920102913" filled="true" marked="true">
+        <point x="150" y="210"></point>
+        <point x="135" y="195"></point>
+        <point x="120" y="210"></point>
+        <point x="60" y="210"></point>
+        <point x="30" y="195"></point>
+        <point x="60" y="180"></point>
+        <point x="60" y="165"></point>
+        <point x="15" y="135"></point>
+        <point x="30" y="120"></point>
+        <point x="15" y="105"></point>
+        <point x="40" y="104"></point>
+        <point x="45" y="90"></point>
+        <point x="60" y="90"></point>
+        <point x="90" y="105"></point>
+        <point x="105" y="120"></point>
+        <point x="120" y="120"></point>
+        <point x="105" y="60"></point>
+        <point x="120" y="60"></point>
+        <point x="135" y="30"></point>
+        <point x="150" y="15"></point>
+        <point x="165" y="30"></point>
+        <point x="180" y="60"></point>
+        <point x="195" y="60"></point>
+        <point x="180" y="120"></point>
+        <point x="195" y="120"></point>
+        <point x="210" y="105"></point>
+        <point x="240" y="90"></point>
+        <point x="255" y="90"></point>
+        <point x="263" y="104"></point>
+        <point x="285" y="105"></point>
+        <point x="270" y="120"></point>
+        <point x="285" y="135"></point>
+        <point x="240" y="165"></point>
+        <point x="240" y="180"></point>
+        <point x="270" y="195"></point>
+        <point x="240" y="210"></point>
+        <point x="180" y="210"></point>
+        <point x="165" y="195"></point>
+      </polygon>
+      <polygon color="-1920102913" filled="true" marked="true">
+        <point x="135" y="195"></point>
+        <point x="135" y="240"></point>
+        <point x="120" y="255"></point>
+        <point x="105" y="255"></point>
+        <point x="105" y="285"></point>
+        <point x="135" y="285"></point>
+        <point x="165" y="240"></point>
+        <point x="165" y="195"></point>
+      </polygon>
+    </shape>
+    <shape name="line" rotatable="true" editableColorIndex="0">
+      <line endX="150" startY="0" marked="true" color="-1920102913" endY="300" startX="150"></line>
+    </shape>
+    <shape name="line half" rotatable="true" editableColorIndex="0">
+      <line endX="150" startY="0" marked="true" color="-1920102913" endY="150" startX="150"></line>
+    </shape>
+    <shape name="pentagon" rotatable="false" editableColorIndex="0">
+      <polygon color="-1920102913" filled="true" marked="true">
+        <point x="150" y="15"></point>
+        <point x="15" y="120"></point>
+        <point x="60" y="285"></point>
+        <point x="240" y="285"></point>
+        <point x="285" y="120"></point>
+      </polygon>
+    </shape>
+    <shape name="person" rotatable="false" editableColorIndex="0">
+      <circle x="110" y="5" marked="true" color="-1920102913" diameter="80" filled="true"></circle>
+      <polygon color="-1920102913" filled="true" marked="true">
+        <point x="105" y="90"></point>
+        <point x="120" y="195"></point>
+        <point x="90" y="285"></point>
+        <point x="105" y="300"></point>
+        <point x="135" y="300"></point>
+        <point x="150" y="225"></point>
+        <point x="165" y="300"></point>
+        <point x="195" y="300"></point>
+        <point x="210" y="285"></point>
+        <point x="180" y="195"></point>
+        <point x="195" y="90"></point>
+      </polygon>
+      <rectangle endX="172" startY="79" marked="true" color="-1920102913" endY="94" startX="127" filled="true"></rectangle>
+      <polygon color="-1920102913" filled="true" marked="true">
+        <point x="195" y="90"></point>
+        <point x="240" y="150"></point>
+        <point x="225" y="180"></point>
+        <point x="165" y="105"></point>
+      </polygon>
+      <polygon color="-1920102913" filled="true" marked="true">
+        <point x="105" y="90"></point>
+        <point x="60" y="150"></point>
+        <point x="75" y="180"></point>
+        <point x="135" y="105"></point>
+      </polygon>
+    </shape>
+    <shape name="plant" rotatable="false" editableColorIndex="0">
+      <rectangle endX="165" startY="90" marked="true" color="-1920102913" endY="300" startX="135" filled="true"></rectangle>
+      <polygon color="-1920102913" filled="true" marked="true">
+        <point x="135" y="255"></point>
+        <point x="90" y="210"></point>
+        <point x="45" y="195"></point>
+        <point x="75" y="255"></point>
+        <point x="135" y="285"></point>
+      </polygon>
+      <polygon color="-1920102913" filled="true" marked="true">
+        <point x="165" y="255"></point>
+        <point x="210" y="210"></point>
+        <point x="255" y="195"></point>
+        <point x="225" y="255"></point>
+        <point x="165" y="285"></point>
+      </polygon>
+      <polygon color="-1920102913" filled="true" marked="true">
+        <point x="135" y="180"></point>
+        <point x="90" y="135"></point>
+        <point x="45" y="120"></point>
+        <point x="75" y="180"></point>
+        <point x="135" y="210"></point>
+      </polygon>
+      <polygon color="-1920102913" filled="true" marked="true">
+        <point x="165" y="180"></point>
+        <point x="165" y="210"></point>
+        <point x="225" y="180"></point>
+        <point x="255" y="120"></point>
+        <point x="210" y="135"></point>
+      </polygon>
+      <polygon color="-1920102913" filled="true" marked="true">
+        <point x="135" y="105"></point>
+        <point x="90" y="60"></point>
+        <point x="45" y="45"></point>
+        <point x="75" y="105"></point>
+        <point x="135" y="135"></point>
+      </polygon>
+      <polygon color="-1920102913" filled="true" marked="true">
+        <point x="165" y="105"></point>
+        <point x="165" y="135"></point>
+        <point x="225" y="105"></point>
+        <point x="255" y="45"></point>
+        <point x="210" y="60"></point>
+      </polygon>
+      <polygon color="-1920102913" filled="true" marked="true">
+        <point x="135" y="90"></point>
+        <point x="120" y="45"></point>
+        <point x="150" y="15"></point>
+        <point x="180" y="45"></point>
+        <point x="165" y="90"></point>
+      </polygon>
+    </shape>
+    <shape name="sheep" rotatable="false" editableColorIndex="15">
+      <circle x="203" y="65" marked="true" color="-1" diameter="88" filled="true"></circle>
+      <circle x="70" y="65" marked="true" color="-1" diameter="162" filled="true"></circle>
+      <circle x="150" y="105" marked="true" color="-1" diameter="120" filled="true"></circle>
+      <polygon color="-1920102913" filled="true" marked="false">
+        <point x="218" y="120"></point>
+        <point x="240" y="165"></point>
+        <point x="255" y="165"></point>
+        <point x="278" y="120"></point>
+      </polygon>
+      <circle x="214" y="72" marked="false" color="-1920102913" diameter="67" filled="true"></circle>
+      <rectangle endX="179" startY="223" marked="true" color="-1" endY="298" startX="164" filled="true"></rectangle>
+      <polygon color="-1" filled="true" marked="true">
+        <point x="45" y="285"></point>
+        <point x="30" y="285"></point>
+        <point x="30" y="240"></point>
+        <point x="15" y="195"></point>
+        <point x="45" y="210"></point>
+      </polygon>
+      <circle x="3" y="83" marked="true" color="-1" diameter="150" filled="true"></circle>
+      <rectangle endX="80" startY="221" marked="true" color="-1" endY="296" startX="65" filled="true"></rectangle>
+      <polygon color="-1" filled="true" marked="true">
+        <point x="195" y="285"></point>
+        <point x="210" y="285"></point>
+        <point x="210" y="240"></point>
+        <point x="240" y="210"></point>
+        <point x="195" y="210"></point>
+      </polygon>
+      <polygon color="-1920102913" filled="true" marked="false">
+        <point x="276" y="85"></point>
+        <point x="285" y="105"></point>
+        <point x="302" y="99"></point>
+        <point x="294" y="83"></point>
+      </polygon>
+      <polygon color="-1920102913" filled="true" marked="false">
+        <point x="219" y="85"></point>
+        <point x="210" y="105"></point>
+        <point x="193" y="99"></point>
+        <point x="201" y="83"></point>
+      </polygon>
+    </shape>
+    <shape name="square" rotatable="false" editableColorIndex="0">
+      <rectangle endX="270" startY="30" marked="true" color="-1920102913" endY="270" startX="30" filled="true"></rectangle>
+    </shape>
+    <shape name="square 2" rotatable="false" editableColorIndex="0">
+      <rectangle endX="270" startY="30" marked="true" color="-1920102913" endY="270" startX="30" filled="true"></rectangle>
+      <rectangle endX="240" startY="60" marked="false" color="255" endY="240" startX="60" filled="true"></rectangle>
+    </shape>
+    <shape name="star" rotatable="false" editableColorIndex="0">
+      <polygon color="-1920102913" filled="true" marked="true">
+        <point x="151" y="1"></point>
+        <point x="185" y="108"></point>
+        <point x="298" y="108"></point>
+        <point x="207" y="175"></point>
+        <point x="242" y="282"></point>
+        <point x="151" y="216"></point>
+        <point x="59" y="282"></point>
+        <point x="94" y="175"></point>
+        <point x="3" y="108"></point>
+        <point x="116" y="108"></point>
+      </polygon>
+    </shape>
+    <shape name="target" rotatable="false" editableColorIndex="0">
+      <circle x="0" y="0" marked="true" color="-1920102913" diameter="300" filled="true"></circle>
+      <circle x="30" y="30" marked="false" color="255" diameter="240" filled="true"></circle>
+      <circle x="60" y="60" marked="true" color="-1920102913" diameter="180" filled="true"></circle>
+      <circle x="90" y="90" marked="false" color="255" diameter="120" filled="true"></circle>
+      <circle x="120" y="120" marked="true" color="-1920102913" diameter="60" filled="true"></circle>
+    </shape>
+    <shape name="tree" rotatable="false" editableColorIndex="0">
+      <circle x="118" y="3" marked="true" color="-1920102913" diameter="94" filled="true"></circle>
+      <rectangle endX="180" startY="195" marked="false" color="-1653716737" endY="300" startX="120" filled="true"></rectangle>
+      <circle x="65" y="21" marked="true" color="-1920102913" diameter="108" filled="true"></circle>
+      <circle x="116" y="41" marked="true" color="-1920102913" diameter="127" filled="true"></circle>
+      <circle x="45" y="90" marked="true" color="-1920102913" diameter="120" filled="true"></circle>
+      <circle x="104" y="74" marked="true" color="-1920102913" diameter="152" filled="true"></circle>
+    </shape>
+    <shape name="triangle" rotatable="false" editableColorIndex="0">
+      <polygon color="-1920102913" filled="true" marked="true">
+        <point x="150" y="30"></point>
+        <point x="15" y="255"></point>
+        <point x="285" y="255"></point>
+      </polygon>
+    </shape>
+    <shape name="triangle 2" rotatable="false" editableColorIndex="0">
+      <polygon color="-1920102913" filled="true" marked="true">
+        <point x="150" y="30"></point>
+        <point x="15" y="255"></point>
+        <point x="285" y="255"></point>
+      </polygon>
+      <polygon color="255" filled="true" marked="false">
+        <point x="151" y="99"></point>
+        <point x="225" y="223"></point>
+        <point x="75" y="224"></point>
+      </polygon>
+    </shape>
+    <shape name="truck" rotatable="false" editableColorIndex="0">
+      <rectangle endX="195" startY="45" marked="true" color="-1920102913" endY="187" startX="4" filled="true"></rectangle>
+      <polygon color="-1920102913" filled="true" marked="true">
+        <point x="296" y="193"></point>
+        <point x="296" y="150"></point>
+        <point x="259" y="134"></point>
+        <point x="244" y="104"></point>
+        <point x="208" y="104"></point>
+        <point x="207" y="194"></point>
+      </polygon>
+      <rectangle endX="195" startY="60" marked="false" color="-1" endY="105" startX="195" filled="true"></rectangle>
+      <polygon color="255" filled="true" marked="false">
+        <point x="238" y="112"></point>
+        <point x="252" y="141"></point>
+        <point x="219" y="141"></point>
+        <point x="218" y="112"></point>
+      </polygon>
+      <circle x="234" y="174" marked="false" color="255" diameter="42" filled="true"></circle>
+      <rectangle endX="214" startY="185" marked="true" color="-1920102913" endY="194" startX="181" filled="true"></rectangle>
+      <circle x="144" y="174" marked="false" color="255" diameter="42" filled="true"></circle>
+      <circle x="24" y="174" marked="false" color="255" diameter="42" filled="true"></circle>
+      <circle x="24" y="174" marked="true" color="-1920102913" diameter="42" filled="false"></circle>
+      <circle x="144" y="174" marked="true" color="-1920102913" diameter="42" filled="false"></circle>
+      <circle x="234" y="174" marked="true" color="-1920102913" diameter="42" filled="false"></circle>
+    </shape>
+    <shape name="turtle" rotatable="true" editableColorIndex="0">
+      <polygon color="1504722175" filled="true" marked="false">
+        <point x="215" y="204"></point>
+        <point x="240" y="233"></point>
+        <point x="246" y="254"></point>
+        <point x="228" y="266"></point>
+        <point x="215" y="252"></point>
+        <point x="193" y="210"></point>
+      </polygon>
+      <polygon color="1504722175" filled="true" marked="false">
+        <point x="195" y="90"></point>
+        <point x="225" y="75"></point>
+        <point x="245" y="75"></point>
+        <point x="260" y="89"></point>
+        <point x="269" y="108"></point>
+        <point x="261" y="124"></point>
+        <point x="240" y="105"></point>
+        <point x="225" y="105"></point>
+        <point x="210" y="105"></point>
+      </polygon>
+      <polygon color="1504722175" filled="true" marked="false">
+        <point x="105" y="90"></point>
+        <point x="75" y="75"></point>
+        <point x="55" y="75"></point>
+        <point x="40" y="89"></point>
+        <point x="31" y="108"></point>
+        <point x="39" y="124"></point>
+        <point x="60" y="105"></point>
+        <point x="75" y="105"></point>
+        <point x="90" y="105"></point>
+      </polygon>
+      <polygon color="1504722175" filled="true" marked="false">
+        <point x="132" y="85"></point>
+        <point x="134" y="64"></point>
+        <point x="107" y="51"></point>
+        <point x="108" y="17"></point>
+        <point x="150" y="2"></point>
+        <point x="192" y="18"></point>
+        <point x="192" y="52"></point>
+        <point x="169" y="65"></point>
+        <point x="172" y="87"></point>
+      </polygon>
+      <polygon color="1504722175" filled="true" marked="false">
+        <point x="85" y="204"></point>
+        <point x="60" y="233"></point>
+        <point x="54" y="254"></point>
+        <point x="72" y="266"></point>
+        <point x="85" y="252"></point>
+        <point x="107" y="210"></point>
+      </polygon>
+      <polygon color="-1920102913" filled="true" marked="true">
+        <point x="119" y="75"></point>
+        <point x="179" y="75"></point>
+        <point x="209" y="101"></point>
+        <point x="224" y="135"></point>
+        <point x="220" y="225"></point>
+        <point x="175" y="261"></point>
+        <point x="128" y="261"></point>
+        <point x="81" y="224"></point>
+        <point x="74" y="135"></point>
+        <point x="88" y="99"></point>
+      </polygon>
+    </shape>
+    <shape name="wheel" rotatable="false" editableColorIndex="0">
+      <circle x="3" y="3" marked="true" color="-1920102913" diameter="294" filled="true"></circle>
+      <circle x="30" y="30" marked="false" color="255" diameter="240" filled="true"></circle>
+      <line endX="150" startY="285" marked="true" color="-1920102913" endY="15" startX="150"></line>
+      <line endX="285" startY="150" marked="true" color="-1920102913" endY="150" startX="15"></line>
+      <circle x="120" y="120" marked="true" color="-1920102913" diameter="60" filled="true"></circle>
+      <line endX="79" startY="40" marked="true" color="-1920102913" endY="269" startX="216"></line>
+      <line endX="269" startY="84" marked="true" color="-1920102913" endY="221" startX="40"></line>
+      <line endX="269" startY="216" marked="true" color="-1920102913" endY="79" startX="40"></line>
+      <line endX="221" startY="40" marked="true" color="-1920102913" endY="269" startX="84"></line>
+    </shape>
+    <shape name="wolf" rotatable="false" editableColorIndex="0">
+      <polygon color="255" filled="true" marked="false">
+        <point x="253" y="133"></point>
+        <point x="245" y="131"></point>
+        <point x="245" y="133"></point>
+      </polygon>
+      <polygon color="-1920102913" filled="true" marked="true">
+        <point x="2" y="194"></point>
+        <point x="13" y="197"></point>
+        <point x="30" y="191"></point>
+        <point x="38" y="193"></point>
+        <point x="38" y="205"></point>
+        <point x="20" y="226"></point>
+        <point x="20" y="257"></point>
+        <point x="27" y="265"></point>
+        <point x="38" y="266"></point>
+        <point x="40" y="260"></point>
+        <point x="31" y="253"></point>
+        <point x="31" y="230"></point>
+        <point x="60" y="206"></point>
+        <point x="68" y="198"></point>
+        <point x="75" y="209"></point>
+        <point x="66" y="228"></point>
+        <point x="65" y="243"></point>
+        <point x="82" y="261"></point>
+        <point x="84" y="268"></point>
+        <point x="100" y="267"></point>
+        <point x="103" y="261"></point>
+        <point x="77" y="239"></point>
+        <point x="79" y="231"></point>
+        <point x="100" y="207"></point>
+        <point x="98" y="196"></point>
+        <point x="119" y="201"></point>
+        <point x="143" y="202"></point>
+        <point x="160" y="195"></point>
+        <point x="166" y="210"></point>
+        <point x="172" y="213"></point>
+        <point x="173" y="238"></point>
+        <point x="167" y="251"></point>
+        <point x="160" y="248"></point>
+        <point x="154" y="265"></point>
+        <point x="169" y="264"></point>
+        <point x="178" y="247"></point>
+        <point x="186" y="240"></point>
+        <point x="198" y="260"></point>
+        <point x="200" y="271"></point>
+        <point x="217" y="271"></point>
+        <point x="219" y="262"></point>
+        <point x="207" y="258"></point>
+        <point x="195" y="230"></point>
+        <point x="192" y="198"></point>
+        <point x="210" y="184"></point>
+        <point x="227" y="164"></point>
+        <point x="242" y="144"></point>
+        <point x="259" y="145"></point>
+        <point x="284" y="151"></point>
+        <point x="277" y="141"></point>
+        <point x="293" y="140"></point>
+        <point x="299" y="134"></point>
+        <point x="297" y="127"></point>
+        <point x="273" y="119"></point>
+        <point x="270" y="105"></point>
+      </polygon>
+      <polygon color="-1920102913" filled="true" marked="true">
+        <point x="-1" y="195"></point>
+        <point x="14" y="180"></point>
+        <point x="36" y="166"></point>
+        <point x="40" y="153"></point>
+        <point x="53" y="140"></point>
+        <point x="82" y="131"></point>
+        <point x="134" y="133"></point>
+        <point x="159" y="126"></point>
+        <point x="188" y="115"></point>
+        <point x="227" y="108"></point>
+        <point x="236" y="102"></point>
+        <point x="238" y="98"></point>
+        <point x="268" y="86"></point>
+        <point x="269" y="92"></point>
+        <point x="281" y="87"></point>
+        <point x="269" y="103"></point>
+        <point x="269" y="113"></point>
+      </polygon>
+    </shape>
+    <shape name="x" rotatable="false" editableColorIndex="0">
+      <polygon color="-1920102913" filled="true" marked="true">
+        <point x="270" y="75"></point>
+        <point x="225" y="30"></point>
+        <point x="30" y="225"></point>
+        <point x="75" y="270"></point>
+      </polygon>
+      <polygon color="-1920102913" filled="true" marked="true">
+        <point x="30" y="75"></point>
+        <point x="75" y="30"></point>
+        <point x="270" y="225"></point>
+        <point x="225" y="270"></point>
+      </polygon>
+    </shape>
+  </turtleShapes>
+  <linkShapes>
+    <shape name="default" curviness="0.0">
+      <lines>
+        <line x="-0.2" visible="false">
+          <dash value="0.0"></dash>
+          <dash value="1.0"></dash>
+        </line>
+        <line x="0.0" visible="true">
+          <dash value="1.0"></dash>
+          <dash value="0.0"></dash>
+        </line>
+        <line x="0.2" visible="false">
+          <dash value="0.0"></dash>
+          <dash value="1.0"></dash>
+        </line>
+      </lines>
+      <indicator>
+        <shape name="link direction" rotatable="true" editableColorIndex="0">
+          <line endX="90" startY="150" marked="true" color="-1920102913" endY="180" startX="150"></line>
+          <line endX="210" startY="150" marked="true" color="-1920102913" endY="180" startX="150"></line>
+        </shape>
+      </indicator>
+    </shape>
+  </linkShapes>
+  <previewCommands>startup
+repeat 300 [ go ]</previewCommands>
+</model>

@@ -1,0 +1,50 @@
+{
+  "netLogoVersion": "7.0.4",
+  "sourceModel": "../netlogo/SBRUG.nlogox",
+  "sourceSha256": "cdc106878c9065b11bd02b9407d5d2a7789b738ba1613cc9e72c4fd2b94df2cb",
+  "seed": 20261027,
+  "seedApplication": "random-seed immediately before startup",
+  "parameters": {
+    "game": "<<-- traveler's dilemma",
+    "reward": 2,
+    "horizon": 98,
+    "n-of-agents": 1000,
+    "sample-size": 2,
+    "log10-prob-exp": -3,
+    "prob-exp": 0.001,
+    "initial-state": "everyone at strategy 1",
+    "final-time": 300,
+    "mean-from": 100
+  },
+  "timeUnit": "1000 sequential revision opportunities; one revision per agent on average",
+  "cooperationMeasure": "C/n: expected lower claim minus 2, divided by horizon, in an independent random match",
+  "data": {
+    "file": "preview-cooperation.json",
+    "columns": ["tick", "sampling", "exact"],
+    "firstTick": 0,
+    "lastTick": 300,
+    "pointCount": 301,
+    "initialPointIncluded": true
+  },
+  "image": {
+    "file": "model-preview.png",
+    "export": "NetLogo export-view, without cropping, resizing or decoration",
+    "width": 600,
+    "height": 406,
+    "topPanel": "sampling best response",
+    "bottomPanel": "exact best response",
+    "columns": "ticks 1 through 300, left to right",
+    "strategyOrder": "strategy index increases from bottom to top within each panel",
+    "colors": "white: zero share; blue: positive share on the model's logarithmic scale; orange: experiments above strategy 1 in that tick"
+  },
+  "summary": {
+    "meanFirstTick": 100,
+    "meanLastTick": 300,
+    "meanPointCount": 201,
+    "meanSampling": 0.7806456317392628,
+    "meanExact": 7.967306325515267E-7,
+    "finalSampling": 0.7325681836734697,
+    "finalExact": 4.6938775510204095E-7
+  },
+  "illustration": "One stochastic trajectory with a fixed seed; these means are descriptive, not stationary estimates or theoretical bounds."
+}
