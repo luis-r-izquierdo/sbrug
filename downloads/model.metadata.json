@@ -1,13 +1,13 @@
 {
   "model_name": "SBRUG",
   "model_source": "netlogo/SBRUG.nlogox",
-  "model_sha256": "cdc106878c9065b11bd02b9407d5d2a7789b738ba1613cc9e72c4fd2b94df2cb",
+  "model_sha256": "83af202a613fe79f063d118fa9ee51d29f4484724b22e2114658e5eeed9f6bbd",
   "desktop_distribution": null,
   "netlogo_web_version": "2.16.0",
   "template_source": "https://netlogoweb.org/versions/2.16.0.html",
   "template_sha256": "2ccd0cf9868e945d35f06e69089db89a1e6bb23e6c151339b3153f1c3890c442",
-  "output_sha256": "b1abd23d36321f10bcb9c34d5577ab7ab6e03601198df734c3328a1ac19c8163",
-  "output_bytes": 5380000,
+  "output_sha256": "8f7c71d382f096496420ec08a0fdfa4111a3f46a3656d201f83dbde689b46e01",
+  "output_bytes": 5380046,
   "auxiliary_tabs_hidden": true,
   "netlogo_attribution_retained": true,
   "bridge_events": [

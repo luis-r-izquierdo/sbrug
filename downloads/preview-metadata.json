@@ -1,7 +1,7 @@
 {
   "netLogoVersion": "7.0.4",
   "sourceModel": "../netlogo/SBRUG.nlogox",
-  "sourceSha256": "cdc106878c9065b11bd02b9407d5d2a7789b738ba1613cc9e72c4fd2b94df2cb",
+  "sourceSha256": "83af202a613fe79f063d118fa9ee51d29f4484724b22e2114658e5eeed9f6bbd",
   "seed": 20261027,
   "seedApplication": "random-seed immediately before startup",
   "parameters": {

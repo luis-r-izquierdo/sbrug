@@ -1,5 +1,7 @@
 # SBRUG: Sampling Best Response in Undercutting Games
 
+[![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.23734407.svg)](https://doi.org/10.5281/zenodo.23734407)
+
 SBRUG is an interactive NetLogo model that compares two ways of revising a strategy in undercutting games, such as the traveler's dilemma and the finitely repeated prisoner's dilemma:
 
 - **Sampling BR:** a revising agent best responds to the strategies of a few randomly observed agents.
@@ -28,7 +30,9 @@ This repository holds the published website. Its files are generated from the au
 
 ## How to cite
 
-Luis R. Izquierdo and Segismundo S. Izquierdo (2026). *SBRUG: Sampling Best Response in Undercutting Games*. NetLogo model. https://luis-r-izquierdo.github.io/sbrug/
+Luis R. Izquierdo and Segismundo S. Izquierdo (2026). *SBRUG: Sampling Best Response in Undercutting Games*. NetLogo model. https://doi.org/10.5281/zenodo.23734407
+
+This DOI always points to the latest version; each version also has its own DOI on Zenodo.
 
 Related paper: Luis R. Izquierdo and Segismundo S. Izquierdo. *How Sampling and Experimentation Sustain Cooperation in Undercutting Games*.
 
